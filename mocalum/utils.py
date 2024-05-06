@@ -295,6 +295,43 @@ def ivap_rc(los, azimuth, ax = 0):
 
     return u, v, wind_speed, wind_dir
 
+
+def DBS_rc(los, azimuth, zenith = 28):
+    """ perform WFR for Windcube v1 type lidar
+    DBS stands for 'doppler beam swinging'
+
+    Parameters
+    ----------
+    los : numpy
+        array containing the line of sight speed measurements
+    azimuth : numpy
+        array containing the azimuth angle of the respective line of sight (basically the number of the beam)
+    zenith : double
+        half opening angle of the lidar
+
+    Returns
+    -------
+    u : numpy
+        array of reconstracted u component of the wind
+    v : numpy
+        array of reconstracted v component of the wind
+    wind_speed: numpy
+        array of reconstracted horizontal wind speed
+    wind_dir: numpy
+        array of reconstructed wind directions
+        direction is defined clockwise with north 0 degrees
+    """
+    zenith = np.radians(zenith)
+
+    u = (los[np.equal(azimuth,90)]-los[np.equal(azimuth,270)]) / (2*np.sin(zenith))
+    v = (los[np.equal(azimuth,0)]-los[np.equal(azimuth,180)]) / (2*np.sin(zenith))
+    
+    wind_speed = np.sqrt(u**2 + v**2)
+    wind_dir = (90 - np.arctan2(-v,-u)* (180 / np.pi)) % 360
+    
+    return u, v, wind_speed, wind_dir
+
+
 def dd_rc_single(los, azimuth):
     """
     Retrieves wind speed by applying dual-Doppler retrieval on LOS measurements
@@ -712,3 +749,4 @@ def gen_unc(mu, std, corr_coef=0, no_samples = 10000):
     samples = std*np.random.multivariate_normal(mu, cov_matrix, no_samples)
 
     return samples
+

@@ -16,6 +16,8 @@ class Data:
         self.ffield = None # should be key-value pairs
         self._ffield = None # should be key-value pairs
         self.rc_wind = None # should be key-value pairs
+        self.tenMin_wind = None # should be key-value pairs
+        self.sonic_wind_tenMin = None
         self.fmodel_cfg = {}
         self.meas_cfg = {}
         self.bbox_meas_pts = {}
@@ -191,6 +193,8 @@ class Data:
         w_4d = sliding_window_slicing(w_3d, no_items, item_type=1).transpose(0,3,2,1)
 
         t = np.arange(0, u_4d.shape[0]*t_res, t_res)
+        if t.shape[0]>u_4d.shape[0]:
+            t = np.delete(t, t.shape[0]-1)  # hack for something that shouldn't happen but it does
         x = np.arange(0, no_items*x_res, x_res) + x_start_pos
 
 
@@ -298,7 +302,8 @@ class Data:
 
 
     def _upd8_meas_cfg(self, lidar_id, scan_type, az, el, rng, no_los,
-                      no_scans, scn_speed, sectrsz, scn_tm, rtn_tm, max_speed, max_acc):
+                      no_scans, scn_speed, sectrsz, scn_tm, rtn_tm, max_speed, 
+                      max_acc,scans_per_10min = None):
         """
         Updates measurement config
 
@@ -337,6 +342,7 @@ class Data:
         self.meas_cfg[lidar_id]['config'].update({'max_scn_acc':max_acc})
         self.meas_cfg[lidar_id]['config'].update({'scn_speed':scn_speed})
         self.meas_cfg[lidar_id]['config'].update({'no_los':no_los})
+        self.meas_cfg[lidar_id]['config'].update({'scans_per_10min':scans_per_10min})
         self.meas_cfg[lidar_id]['config'].update({'no_scans':no_scans})
         self.meas_cfg[lidar_id]['config'].update({'sectrsz':sectrsz})
         self.meas_cfg[lidar_id]['config'].update({'scn_tm':scn_tm})
@@ -458,7 +464,7 @@ class Data:
         """
         # TODO: detect what type of measurements it is (PPI, RHI, etc.)
 
-        los = xr.Dataset({'vrad': (['time'], los),
+        los = xr.Dataset({'vrad': (['time'], los.data),
                               'az': (['time'],  self.probing[lidar_id].az.values),
                               'el': (['time'],  self.probing[lidar_id].el.values),
                               'rng': (['time'], self.probing[lidar_id].rng.values),
@@ -510,7 +516,7 @@ class Data:
                                              'Virtual sonics')
 
 
-    def _cr8_rc_wind_ds(self, scan_type, u, v, ws, wdir, w = None):
+    def _cr8_rc_wind_ds(self, scan_type, u, v, ws, wdir, w = None, availability = None):
         """
         Create mocalum reconstructed wind xarray dataset
 
@@ -530,19 +536,24 @@ class Data:
             Array of reconstructed vertical wind speed, by default None
         """
         shape = ws.shape
+        if type(availability) == type(None):
+            availability = np.ones_like(ws)
+
         if type(w) != type(None):
             self.rc_wind = xr.Dataset({'ws': (['scan', 'point'], ws),
                                     'wdir':(['scan', 'point'], wdir),
                                     'u': (['scan', 'point'], u),
                                     'v': (['scan', 'point'], v),
-                                    'w': (['scan', 'point'], w)
+                                    'w': (['scan', 'point'], w),
+                                    'availability': (['scan', 'point'], availability)
                                     },coords={'scan': np.arange(1,shape[0]+1, 1),
                                               'point' : np.arange(1,shape[1]+1, 1)})
         else:
             self.rc_wind = xr.Dataset({'ws': (['scan','point'], ws),
                                     'wdir':(['scan', 'point'], wdir),
                                     'u': (['scan', 'point'], u),
-                                    'v': (['scan', 'point'], v)
+                                    'v': (['scan', 'point'], v),
+                                    'availability': (['scan', 'point'], availability)
                                     },coords={'scan': np.arange(1,shape[0]+1, 1),
                                               'point' : np.arange(1,shape[1]+1, 1)})
 
@@ -551,6 +562,7 @@ class Data:
         self.rc_wind = self._add_metadata(self.rc_wind, metadata,
                                       'Reconstructed wind')
         self.rc_wind.attrs['scan_type'] = scan_type
+
 
     def _get_ffield_coords(self, id):
         """

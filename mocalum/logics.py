@@ -4,6 +4,7 @@ operate on data which are stored in persistance module.
 
 import numpy as np
 from numpy.linalg import inv as inv
+from scipy.stats import circmean, circstd
 import xarray as xr
 
 # import data instance
@@ -14,11 +15,12 @@ from .utils import move2time, spher2cart, get_plaw_uvw, project2los, _rot_matrix
 from .utils import sliding_window_slicing, bbox_pts_from_array, bbox_pts_from_cfg
 from .utils import calc_mean_step, safe_execute, generate_beam_coords
 from .utils import trajectory2displacement, displacement2time
-from .utils import ivap_rc, dd_rc_array, td_rc_array, gen_unc
+from .utils import ivap_rc, DBS_rc, dd_rc_array, td_rc_array, gen_unc
 
 # turbulence box generation tools
-from pyconturb.wind_profiles import power_profile
 from pyconturb import gen_turb, gen_spat_grid
+from pyconturb.wind_profiles import power_profile
+from pyconturb.sig_models import iec_sig, constant_sig
 
 class Mocalum:
 
@@ -297,6 +299,125 @@ class Mocalum:
 
         # # create flow field bounding box dict
         self._cr8_bbox_meas_pts(lidar_id)
+
+
+    def generate_VAD_scan(self, lidar_id, VAD_cfg):
+        """
+        Generate measurement points for VAD scan (ground based lidar) and create probing DataSet
+
+        Parameters
+        ----------
+        lidar_id : str
+            Id of lidar to be consider for genration of PPI measurement points
+        VAD_cfg : dict
+            Dictionary holding configuration of VAD scan
+
+        Notes
+        -----
+        VAD_cfg must contain following keys having values in specific type:
+              lidar_model : str
+                 'windcube_v1', 'windcube_v2', or 'ZX'. The lidar model determines 
+                 the kind of wind field reconstruction, the number of beams, scan times etc.
+              range : float, int
+                 Range at which measurements should take place (distance above lidar, not LOS range)
+              half_angle : float, int
+                Angle between the beam (cone) and the vertical centre line 
+              acq_time : float
+                 Acquisition time per angular step
+              no_10min_scans : int
+                 Number of 10-min scan that should be simulated
+                 
+                 for ZX it must be specified how long a range is visited
+        """
+
+        no_10min_scans = VAD_cfg['no_10min_scans']
+        half_angle = VAD_cfg['half_angle'] if 'half_angle' in VAD_cfg else 28
+        rng = VAD_cfg['range']
+        lidar_model = VAD_cfg['lidar_model']
+        elevation = 90 - half_angle
+
+        # prevent users stupidity and raise errors!
+        if half_angle <= 0:
+            raise ValueError('Opening angle between lines of sight must be > 0!')
+        if no_10min_scans <= 0:
+            raise ValueError('Number of scans must be > 0!')
+
+        # windcube with 4 beams
+        if lidar_model == 'windcube_v1':
+            az = np.array([0, 90, 180, 270])
+            ranges = np.full(len(az), rng/np.cos(half_angle/180*np.pi), dtype=float)
+            el = np.full(len(az), elevation, dtype=float)
+            acq_time = 1
+            scan_time = 4 # no_LOS*scan_speed
+            scans_per_10min = 150
+            if not 'WFR_algorithm' in VAD_cfg:
+                VAD_cfg.update({'WFR_algorithm':'DBS'})
+            #        atmo_cfg.update({'flow_model':'PyConTurb'})
+        # a windcube with 5 beams looks probably lke this:
+        elif lidar_model == 'windcube_v2':
+            az = np.array([0, 90, 180, 270, 0])
+            ranges = np.full(len(az)-1, rng/np.cos(half_angle/180*np.pi), dtype=float)
+            # translate the range into ranges along LOS;
+            ranges = np.append(ranges, rng)
+            # 5th beam measures straight up thus range above lidar is range along LOS
+            el = np.full(len(az)-1, elevation, dtype=float)
+            el = np.append(el, 90)
+            acq_time = 1
+            scan_time = 5 # no_LOS*scan_speed
+            scans_per_10min = 120
+            if not 'WFR_algorithm' in VAD_cfg:
+                VAD_cfg.update({'WFR_algorithm':'DBS'})
+        # a ZX probably looks like this:
+        elif lidar_model == 'ZX':
+            az = np.arange(0, 360, 7.2, dtype=float)
+            # 50 scans correspond to 7.2 degree steps
+            ranges = np.full(len(az), rng/np.cos(half_angle/180*np.pi), dtype=float)
+            el = np.full(len(az), elevation, dtype=float)
+            acq_time = 1/50
+            scan_time = 1
+            scans_per_10min = 600
+            if not 'WFR_algorithm' in VAD_cfg:
+                VAD_cfg.update({'WFR_algorithm':'VAD'})
+        else:
+            raise ValueError('lidar model unknown')
+
+        no_los = len(az)
+        no_scans = VAD_cfg['no_scans'] if 'no_scans' in VAD_cfg else scans_per_10min
+
+        max_speed = 90 # degrees per second
+        max_acc = 100
+        sweep_time = 0  # no kinematics
+        scan_speed = 1
+        sector_size = 360
+
+        # create measurement configuration dictionary
+        self.data._upd8_meas_cfg(lidar_id, 'VAD', az, el, ranges, no_los, no_scans,
+                                scan_speed, sector_size, scan_time, sweep_time,
+                                max_speed, max_acc, scans_per_10min)
+
+        # tile probing coordinates to match no of scans
+        az = np.tile(az, no_scans)
+        ranges = np.tile(ranges, no_scans)
+        el = np.tile(el, no_scans)
+
+        # creating time dim
+        time = np.arange(acq_time, (1 + no_los)*acq_time,acq_time)
+
+        time = np.tile(time, no_scans)
+        to_add = np.repeat(scan_time + sweep_time, no_scans*no_los)
+        multip = np.repeat(np.arange(0,no_scans), no_los)
+        time = time + multip*to_add
+
+        
+        # create probing dataset later to be populated with probing unc
+        self.data._cr8_probing_ds(lidar_id, az, el, ranges, time)
+
+        # adding xyz (these will not have uncertainties)
+        self._calc_xyz(lidar_id)
+
+        # # create flow field bounding box dict
+        self._cr8_bbox_meas_pts(lidar_id)
+        
 
     def _single_lidar_ct_traj(self, lidar_id, CT_cfg):
         """
@@ -764,7 +885,7 @@ class Mocalum:
 
         self.data._cr8_plfield_ds('power_law', u, v, w)
 
-    def _turbulent_ffield(self,lidar_id, atmo_cfg):
+    def _turbulent_ffield(self,lidar_id, atmo_cfg, turb_parameter=None):
         """
         Generates turbulent flow field
 
@@ -806,13 +927,27 @@ class Mocalum:
         T_tot = self.turbbox_time
         T_res = self.data.bbox_ffield['turbulence_box']['t']['res']
 
+        if turb_parameter == None:
+            sig_func = iec_sig
+            kwargs = {'turb_class': 'C'}
+        elif 'TI' in turb_parameter:
+            sig_func = constant_sig
+            TI = turb_parameter['TI']
+            wind = atmo_cfg['wind_speed']
+            kwargs = {'sig_vals': [TI*wind,TI*wind*0.8,TI*wind*0.5],
+                      'comps': [0,1,2]}
+        elif 'IEC_class' in turb_parameter:
+            sig_func = iec_sig
+            kwargs = {'turb_class': turb_parameter['IEC_class']}
 
         turb_df = gen_turb(spat_df, T=T_tot + T_res,
                            dt=T_res,
                            wsp_func = power_profile,
                            u_ref=atmo_cfg['wind_speed'],
                            z_ref=atmo_cfg['reference_height'],
-                           alpha=atmo_cfg['shear_exponent'])
+                           alpha=atmo_cfg['shear_exponent'],
+                           sig_func=sig_func,
+                           **kwargs)
 
         # first create 3D ds
         self.data._cr8_3d_tfield_ds('turbulence_box', turb_df)
@@ -822,7 +957,7 @@ class Mocalum:
 
 
 
-    def generate_flow_field(self, lidar_id, atmo_cfg=None, flow_type="uniform"):
+    def generate_flow_field(self, lidar_id, atmo_cfg=None, flow_type="uniform", turb_parameter=None):
         """
         Generate flow field that entails measurement points of lidars
 
@@ -864,20 +999,20 @@ class Mocalum:
                                                "upward_velocity",
                                                "wind_from_direction",
                                                "reference_height",
-                                               "shear_exponent"))):
+                                               "shear_exponent",
+                                               "flowfield_type"))):
 
                 raise KeyError('Missing one or more keys in atmo_cfg')
 
         if flow_type == "uniform":
             self._power_law_ffield(lidar_id, atmo_cfg)
         elif flow_type == "turbulent":
-            self._turbulent_ffield(lidar_id, atmo_cfg)
+            self._turbulent_ffield(lidar_id, atmo_cfg, turb_parameter)
 
     # Methods related to projection of flow field to measurement points
     #
     def project_to_los(self, lidar_id):
         """Projects wind vector on laser beam line-of-sight
-
 
         Parameters
         ----------
@@ -957,14 +1092,26 @@ class Mocalum:
 
 
     # Methods related to reconstruction of wind vector from los measurements
-    #
     @staticmethod
     def _scan_average(a, no_los, no_scans, no_avg):
-        a_avg = a.values.reshape(no_scans,no_los).reshape(int(no_scans/no_avg),
+        a_avg = np.nanmean(a.values.reshape(no_scans,no_los).reshape(int(no_scans/no_avg),
                                                           no_avg,
-                                                          no_los).mean(axis=1)
-
+                                                          no_los),axis=1)
         return a_avg.flatten()
+
+
+    def remove_samples(self, lidar_id, scan_config):
+        if 'availability' in scan_config:
+            availability = scan_config['availability']
+        else:
+            availability = 1
+        if not hasattr(self.data,'los'):
+            raise ValueError('The wind speed is not yet projected to the LOS.')
+        if availability < 0 or availability > 1:
+            raise ValueError('availability should be between zero and one (inclusive).')
+        self.data.los[lidar_id].vrad[np.random.rand(
+            *self.data.los[lidar_id].vrad.shape) >= availability] = np.nan
+
 
     def _IVAP_reconstruction(self, lidar_id, no_scans_avg):
         """
@@ -989,18 +1136,18 @@ class Mocalum:
 
         if type(no_scans_avg) == int and (no_scans % no_scans_avg == 0):
             no_scans_new = int(no_scans/no_scans_avg)
-            az= self._scan_average(self.data.los[lidar_id].az, no_los,
+            az = self._scan_average(self.data.los[lidar_id].az, no_los,
                                    no_scans, no_scans_avg).reshape(no_scans_new, no_los)
-            el= self._scan_average(self.data.los[lidar_id].el, no_los,
+            el = self._scan_average(self.data.los[lidar_id].el, no_los,
                                    no_scans, no_scans_avg).reshape(no_scans_new, no_los)
-            los= self._scan_average(self.data.los[lidar_id].vrad, no_los,
+            los = self._scan_average(self.data.los[lidar_id].vrad, no_los,
                                    no_scans, no_scans_avg).reshape(no_scans_new, no_los)
             no_scans = int(no_scans/no_scans_avg)
 
         else:
-            az= self.data.los[lidar_id].az.values.reshape(no_scans, no_los)
-            el= self.data.los[lidar_id].el.values.reshape(no_scans, no_los)
-            los= self.data.los[lidar_id].vrad.values.reshape(no_scans, no_los)
+            az = self.data.los[lidar_id].az.values.reshape(no_scans, no_los)
+            el = self.data.los[lidar_id].el.values.reshape(no_scans, no_los)
+            los = self.data.los[lidar_id].vrad.values.reshape(no_scans, no_los)
 
 
         u, v, ws, wdir = ivap_rc(los, az, 1)
@@ -1010,6 +1157,104 @@ class Mocalum:
                                   v.reshape(no_scans, 1),
                                   ws.reshape(no_scans, 1),
                                   wdir.reshape(no_scans, 1))
+
+
+    def _DBS_reconstruction(self, lidar_id, no_scans_avg):
+        """
+        reconstruction of Windcube v1 and v2 goes here
+
+        Parameters
+        ----------
+        lidar_id : TYPE
+            DESCRIPTION.
+        no_scans_avg : TYPE
+            DESCRIPTION.
+
+        Returns
+        -------
+        None.
+
+        """
+
+        no_los = self.data.meas_cfg[lidar_id]['config']['no_los']
+        no_scans = self.data.meas_cfg[lidar_id]['config']['no_scans']
+        
+        if type(no_scans_avg) == int and (no_scans % no_scans_avg != 0):
+            raise ValueError('Total number of scans must be divisible with number of scans to average')
+
+        if type(no_scans_avg) == str and no_scans_avg == 'vector':
+            availability = (~np.isnan(self.data.los[lidar_id].vrad.values)).sum()/no_scans
+            no_scans_avg = int(self.data.meas_cfg[lidar_id]['config']['scans_per_10min'])
+            no_scans_new = int(no_scans/no_scans_avg)
+            az = self._scan_average(self.data.los[lidar_id].az, no_los,
+                                    no_scans, no_scans_avg).reshape(no_scans_new, no_los)
+            el = self._scan_average(self.data.los[lidar_id].el, no_los,
+                                    no_scans, no_scans_avg).reshape(no_scans_new, no_los)
+            los = self._scan_average(self.data.los[lidar_id].vrad, no_los,
+                                     no_scans, no_scans_avg).reshape(no_scans_new, no_los)
+            #zenith = 90 - el
+            u, v, ws, wdir = DBS_rc(los, az)
+            no_scans = no_scans_new
+        else:  # reconstruction every second
+            az = self.data.los[lidar_id].az.values.reshape(no_scans, no_los)
+            el = self.data.los[lidar_id].el.values.reshape(no_scans, no_los)
+            los = self.data.los[lidar_id].vrad.values.reshape(no_scans, no_los)
+
+            # in order to implement the continuous 'sliding window' output of the lidar 
+            # copy the data shifted by one into the third diemnsion of the array 
+            # and flatten in back to two dimensions:
+            az_sliding = np.empty((no_los,no_scans,no_los))
+            los_sliding = np.empty((no_los,no_scans,no_los))
+            #el_sliding = np.empty((no_los,no_scans,no_los))
+            for i in range(no_los):
+                az_sliding[i,:,:] = np.roll(az, -i)
+                los_sliding[i,:,:] = np.roll(los, -i)
+                #el_sliding[i,:,:] = np.roll(el, -i)
+
+            az_sliding = np.reshape(az_sliding, (no_scans*no_los, no_los), order='F')
+            los_sliding = np.reshape(los_sliding, (no_scans*no_los, no_los), order='F')
+            #el_sliding = np.reshape(el_sliding, (no_scans*no_los, no_los), order='F')
+            #zenith = 90 - el_sliding
+            u, v, ws, wdir = DBS_rc(los_sliding, az_sliding)
+            availability = (~np.isnan(ws)).astype(int)
+            no_scans = no_scans*no_los;
+
+            if type(no_scans_avg) == str and no_scans_avg == 'scalar':
+                no_avg = 600
+                u = np.nanmean(u.reshape(int(no_scans/no_avg),no_avg),axis=1)
+                v = np.nanmean(v.reshape(int(no_scans/no_avg),no_avg),axis=1)
+                ws_tmp = ws.reshape(int(no_scans/no_avg),no_avg)
+                availability = (~np.isnan(ws_tmp)).sum(axis=1)/no_avg
+                ws = np.nanmean(ws_tmp,axis=1)
+                wdir = circmean(wdir.reshape(int(no_scans/no_avg),no_avg),high=360,axis=1,nan_policy='omit')
+                no_scans = int(no_scans/no_avg)
+
+
+        self.data._cr8_rc_wind_ds('ground based lidar DBS',
+                                  u.reshape(no_scans, 1),
+                                  v.reshape(no_scans, 1),
+                                  ws.reshape(no_scans, 1),
+                                  wdir.reshape(no_scans, 1),
+                                  None, availability.reshape(no_scans, 1))
+
+
+    def _VAD_reconstruction(self, lidar_id, no_scans_avg):
+        """
+        Reconstruction of ZX goes here
+
+        Parameters
+        ----------
+        lidar_id : TYPE
+            DESCRIPTION.
+        no_scans_avg : TYPE
+            DESCRIPTION.
+
+        Returns
+        -------
+        None.
+
+        """
+
 
     def _is_dual_Doppler(self, lidar_id):
         """
@@ -1240,7 +1485,7 @@ class Mocalum:
                                   w.reshape(no_scans, no_los))
 
 
-    def reconstruct_wind(self, lidar_id, rc_method = 'IVAP', no_scans_avg=None):
+    def reconstruct_wind(self, lidar_id, rc_method = 'IVAP', no_scans_avg = None):
         """Reconstructs wind speed according to the selected retrieval method
 
         Parameters
@@ -1257,5 +1502,50 @@ class Mocalum:
             self._dual_Doppler_reconstruction(lidar_id,no_scans_avg)
         elif rc_method == 'triple-Doppler':
             self._triple_Doppler_reconstruction(lidar_id,no_scans_avg)
+        elif rc_method ==  'DBS':
+            self._DBS_reconstruction(lidar_id, no_scans_avg)
+        elif rc_method == 'VAD':
+            self._VAD_reconstruction(lidar_id, no_scans_avg)
         else:
             print('Unsupported wind reconstruction method')
+
+
+    def simulate_statistical_wind(self, lidar_id, scan_config, atmo_config, turb_parameter=None):
+        """
+        
+
+        Parameters
+        ----------
+        lidar_id : TYPE
+            DESCRIPTION.
+
+        Returns
+        -------
+        None.
+
+        """
+        for i in range(scan_config['no_10min_scans']):
+            self.generate_VAD_scan(lidar_id,scan_config)
+            self.generate_uncertainties(lidar_id)
+            #atmo_config.pop('flow_model')
+            self.generate_flow_field(lidar_id,atmo_config,atmo_config['flowfield_type'], turb_parameter)
+            self.project_to_los(lidar_id)
+            self.remove_samples(lidar_id, scan_config)
+            self.reconstruct_wind(lidar_id, scan_config['WFR_algorithm'], scan_config['10min_average'])
+            sonic_pos = np.array([[data.probing[lidar_id].lidar_pos_x.values,
+                                  data.probing[lidar_id].lidar_pos_y.values,
+                                  scan_config['range']]])
+            time_steps = self.data.probing['hugin'].time.values
+            self.generate_virtual_sonic(sonic_pos, time_steps)
+            if i == 0:
+                self.data.tenMin_wind = self.data.rc_wind.copy()
+                self.data.sonic_wind_tenMin = self.data.sonic_wind.mean()
+            else:
+                new_idx = self.data.tenMin_wind.scan.max().values
+                self.data.rc_wind['scan'] = self.data.rc_wind['scan'] + new_idx
+                self.data.tenMin_wind = xr.concat(
+                    [self.data.tenMin_wind, self.data.rc_wind], dim="scan")
+                self.data.sonic_wind_tenMin = xr.concat(
+                    [self.data.sonic_wind_tenMin, self.data.sonic_wind.mean()], dim='scan')
+
+
