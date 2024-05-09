@@ -994,15 +994,12 @@ class Mocalum:
             'reference_height':100,
             'shear_exponent':0.2,
             }
-        else:
-            if not(all(k in atmo_cfg for k in ("wind_speed",
-                                               "upward_velocity",
-                                               "wind_from_direction",
-                                               "reference_height",
-                                               "shear_exponent",
-                                               "flowfield_type"))):
-
-                raise KeyError('Missing one or more keys in atmo_cfg')
+        elif missing_keys := [key for key in ("wind_speed",
+                                              "upward_velocity",
+                                              "wind_from_direction",
+                                              "reference_height",
+                                              "shear_exponent",) if key not in atmo_cfg]:
+                raise KeyError(f'Missing keys in atmo_cfg: {", ".join(missing_keys)}')
 
         if flow_type == "uniform":
             self._power_law_ffield(lidar_id, atmo_cfg)

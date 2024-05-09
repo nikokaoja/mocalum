@@ -1,0 +1,30 @@
+[tool.poetry]
+name = "mocalum"
+version = "0.2.0"
+description = "MOCALUM: A Python package for Monte Carlo based lidar uncertainty modeling"
+authors = ["Nikola Vasiljevic <me@thisisnikola.com>"]
+license = "Free for non-commercial use, requires permision for commercial use"
+readme = "README.md"
+
+packages = [{ include = "mocalum", from = "." }]
+
+[tool.poetry.dependencies]
+python = "^3.11"
+numpy = "^1.26.4"
+pandas = "^2.2.2"
+xarray = "^2024.3.0"
+netCDF4 = "^1.6.5"
+matplotlib = "^3.8.4"
+tqdm = "^4.66.4"
+scipy = "^1.13.0"
+pyconturb = "^2.7.3"
+
+[tool.poetry.group.dev.dependencies]
+jupyter = "^1.0.0"
+pytest = "^8.2.0"
+pre-commit = "^3.7.0"
+mypy = "^1.10.0"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
