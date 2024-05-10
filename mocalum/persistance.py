@@ -536,12 +536,16 @@ class Data:
             Array of reconstructed wind direction values
         w : numpy, optional
             Array of reconstructed vertical wind speed, by default None
+        availability : numpy, optional
+            Array of availability values per scan and per measurement point, by default None
         """
         shape = ws.shape
-        if type(availability) == type(None):
+
+        if not availability:
+            # set it to be 1 == 100% for all data points
             availability = np.ones_like(ws)
 
-        if type(w) != type(None):
+        if w:
             self.rc_wind = xr.Dataset({'ws': (['scan', 'point'], ws),
                                     'wdir':(['scan', 'point'], wdir),
                                     'u': (['scan', 'point'], u),
