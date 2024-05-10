@@ -297,8 +297,7 @@ def ivap_rc(los, azimuth, ax = 0):
 
 
 def DBS_rc(los, azimuth, zenith = 28):
-    """ perform WFR for Windcube v1 type lidar
-    DBS stands for 'doppler beam swinging'
+    """Applies Dopple Beam Swinging reconstruction technique on a set of los speeds
 
     Parameters
     ----------
