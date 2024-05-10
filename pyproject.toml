@@ -2,7 +2,11 @@
 name = "mocalum"
 version = "0.2.0"
 description = "MOCALUM: A Python package for Monte Carlo based lidar uncertainty modeling"
-authors = ["Nikola Vasiljevic <me@thisisnikola.com>"]
+authors = [
+    "Nikola Vasiljevic <me@thisisnikola.com>",
+    "Andrea Vignaroli <>",
+    "Jochen Rainer Cleve <JOCCL@orsted.com>",
+]
 license = "Free for non-commercial use, requires permision for commercial use"
 readme = "README.md"
 
