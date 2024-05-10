@@ -335,6 +335,8 @@ class Data:
             Maximum permitted angular speed, in deg/s
         max_acc : float
             Maximum permitted angular acceleration, in deg/s^2
+        scans_per_10min : int, optional
+            Number of scans per 10 minutes, by default None
         """
 
         self.meas_cfg[lidar_id]['config'].update({'scan_type':scan_type})
@@ -464,19 +466,19 @@ class Data:
         """
         # TODO: detect what type of measurements it is (PPI, RHI, etc.)
 
-        los = xr.Dataset({'vrad': (['time'], los.data),
-                              'az': (['time'],  self.probing[lidar_id].az.values),
-                              'el': (['time'],  self.probing[lidar_id].el.values),
-                              'rng': (['time'], self.probing[lidar_id].rng.values),
-                              'no_scans':(self.probing[lidar_id].no_scans.values),
-                              'no_los':  (self.probing[lidar_id].no_los.values)
-                              },coords={'time': self.probing[lidar_id].time.values})
+        los = xr.Dataset({'vrad': (['time'], los),
+                           'az': (['time'],  self.probing[lidar_id].az.values),
+                           'el': (['time'],  self.probing[lidar_id].el.values),
+                           'rng': (['time'], self.probing[lidar_id].rng.values),
+                           'no_scans':(self.probing[lidar_id].no_scans.values),
+                           'no_los':  (self.probing[lidar_id].no_los.values)},
+                           coords={'time': self.probing[lidar_id].time.values})
 
 
         # adding/updating metadata
         los = self._add_metadata(los, metadata,'Radial wind speed dataset')
-
         self.los.update({lidar_id:los})
+
     def _cr8_sonic_ds(self, points_pos, time, u, v, w, ws, wdir):
         """
         Create mocalum virtual sonic anemometer xarray dataset
