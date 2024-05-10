@@ -1106,6 +1106,7 @@ class Mocalum:
             raise ValueError('The wind speed is not yet projected to the LOS.')
         if availability < 0 or availability > 1:
             raise ValueError('availability should be between zero and one (inclusive).')
+        
         self.data.los[lidar_id].vrad[np.random.rand(
             *self.data.los[lidar_id].vrad.shape) >= availability] = np.nan
 
@@ -1179,6 +1180,7 @@ class Mocalum:
         if type(no_scans_avg) == int and (no_scans % no_scans_avg != 0):
             raise ValueError('Total number of scans must be divisible with number of scans to average')
 
+        # vector averaging approach
         if type(no_scans_avg) == str and no_scans_avg == 'vector':
             availability = (~np.isnan(self.data.los[lidar_id].vrad.values)).sum()/no_scans
             no_scans_avg = int(self.data.meas_cfg[lidar_id]['config']['scans_per_10min'])
@@ -1251,6 +1253,7 @@ class Mocalum:
         None.
 
         """
+        raise NotImplementedError('VAD reconstruction is not yet implemented')
 
 
     def _is_dual_Doppler(self, lidar_id):
